@@ -7,81 +7,86 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 app.post('/scrape', async (req, res) => {
-  const { site } = req.body;
-  if (site !== 'mobile.de') {
-    return res.status(400).json({ success: false, error: 'Пока только mobile.de' });
-  }
+  const { site } = req.body || {};
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process'
+    ]
   });
 
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
+
+    // Лучшие анти-детект настройки
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8'
+    });
 
-    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C&sortOption.sortBy=searchNetGrossPrice&sortOption.sortOrder=ASCENDING';
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    });
 
-    // Очень агрессивный парсинг — берём всё, что выглядит как объявление
+    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C';
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+    // Долгая задержка + скролл, чтобы обойти lazy loading и проверки
+    await page.waitForTimeout(8000);
+
+    await page.evaluate(() => window.scrollBy(0, 800));
+    await page.waitForTimeout(3000);
+
     const listings = await page.evaluate(() => {
       const results = [];
+      const elements = document.querySelectorAll('article, [data-testid="offer-list-item"], .offer-item, div[class*="offer"]');
 
-      // Ищем все возможные карточки объявлений
-      const candidates = document.querySelectorAll('article, div[class*="offer"], div[class*="result"], div[class*="listing"], div[data-testid], section');
-
-      candidates.forEach((el, index) => {
+      elements.forEach((el, i) => {
         const text = el.innerText || '';
-        if (text.length < 30) return; // слишком короткий блок
+        if (text.length < 40) return;
 
-        // Ищем цену
-        const priceMatch = text.match(/(\d{1,3}(?:\s?\d{3})*(?:,\d+)?)\s*€/);
+        const priceMatch = text.match(/(\d{1,3}(?:\.\d{3})*)\s*€?/);
         const price = priceMatch ? priceMatch[0] + ' €' : 'Цена не указана';
 
-        // Ищем ссылку
         let url = '';
-        const link = el.querySelector('a[href*="/details/"], a[href*="/lk w/"]');
-        if (link) url = link.href;
-
-        if (!url) {
-          const anyLink = el.querySelector('a');
-          if (anyLink && anyLink.href.includes('mobile.de')) url = anyLink.href;
-        }
+        const link = el.querySelector('a');
+        if (link && link.href.includes('mobile.de')) url = link.href;
 
         if (url) {
-          const title = text.split('\n')[0].trim().substring(0, 150) || 'Грузовик ' + (index + 1);
-
           results.push({
-            listing_id: url.split('/').pop().replace(/\D/g, '') || 'id' + Date.now() + index,
+            listing_id: url.split('/').pop().replace(/\D/g, '') || 'id' + i,
             source: 'mobile.de',
-            title: title,
+            title: text.split('\n')[0].trim().substring(0, 120),
             price: price,
             url: url
           });
         }
       });
-
-      return results.slice(0, 20);
+      return results.slice(0, 15);
     });
 
-    // Делаем скриншот для отладки
     const screenshot = await page.screenshot({ encoding: 'base64' });
 
     res.json({
       success: true,
       site: 'mobile.de',
       count: listings.length,
-      listings: listings,
+      listings,
       debug: {
         screenshot_length: screenshot.length,
-        message: listings.length > 0 ? "Объявления найдены!" : "Объявления не найдены. Скриншот сделан."
+        message: listings.length > 0 ? "Успех!" : "Всё ещё пусто"
       }
     });
 
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   } finally {
     await browser.close();
   }
@@ -89,4 +94,4 @@ app.post('/scrape', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => console.log(`🚀 Сервис на порту ${PORT}`));
+app.listen(PORT, () => console.log('Server running'));
