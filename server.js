@@ -6,83 +6,86 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-app.post('/scrape', async (req, res) => {
-  const { site } = req.body || {};
+const sites = {
+  'truck1.eu': {
+    name: 'truck1.eu',
+    url: 'https://www.truck1.eu/tractor-units?yr-2021',
+    selector: 'div.offer-item, article, .offer'
+  },
+  'autoline.info': {
+    name: 'autoline.info',
+    url: 'https://autoline.info/-/truck-tractors/2021--c42ym2021',
+    selector: 'div.listing-item, article, .offer-card'
+  }
+};
 
-  if (site !== 'mobile.de') {
-    return res.status(400).json({ success: false, error: 'Пока только mobile.de' });
+app.post('/scrape', async (req, res) => {
+  const { site } = req.body;
+
+  if (!sites[site]) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Поддерживаются только truck1.eu и autoline.info' 
+    });
   }
 
+  const config = sites[site];
   let browser;
+
   try {
     browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
-    });
+    const page = await browser.newPage();
+    await page.goto(config.url, { waitUntil: 'networkidle', timeout: 45000 });
 
-    const page = await context.newPage();
+    // Ждём загрузки объявлений
+    await page.waitForTimeout(6000);
 
-    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C&sortOption.sortBy=searchNetGrossPrice&sortOption.sortOrder=ASCENDING';
-
-    console.log('Открываю mobile.de...');
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-    // Долгое ожидание + несколько скроллов
-    await page.waitForTimeout(10000);
-
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 1500));
-      await page.waitForTimeout(4000);
-    }
-
-    // Ждём появления хотя бы одного объявления
-    await page.waitForSelector('article, [data-testid="offer-list-item"], div[class*="offer"]', { timeout: 15000 }).catch(() => {});
-
-    const listings = await page.evaluate(() => {
+    const listings = await page.evaluate((cfg) => {
       const results = [];
-      const cards = document.querySelectorAll('article, [data-testid="offer-list-item"], div[class*="offer"], div[class*="result"]');
+      const cards = document.querySelectorAll(cfg.selector);
 
       cards.forEach((card, i) => {
         const text = card.innerText || '';
-        if (text.length < 60) return;
+        if (text.length < 40) return;
 
-        const priceMatch = text.match(/(\d{1,3}(?:\.\d{3})*)\s*€?/);
+        // Цена
+        const priceMatch = text.match(/(\d{1,3}(?:\s?\d{3})*(?:,\d+)?)\s*€?/i);
         const price = priceMatch ? priceMatch[0] + ' €' : 'Цена не указана';
 
+        // Ссылка
         let url = '';
-        const link = card.querySelector('a[href*="/details/"]') || card.querySelector('a');
-        if (link && link.href.includes('mobile.de')) url = link.href;
+        const link = card.querySelector('a');
+        if (link) url = link.href.startsWith('http') ? link.href : 'https://www.truck1.eu' + link.href;
 
         if (url) {
           results.push({
             listing_id: url.split('/').pop().replace(/\D/g, '') || String(Date.now() + i),
-            source: 'mobile.de',
-            title: text.split('\n')[0].trim().substring(0, 150),
+            source: cfg.name,
+            title: text.split('\n')[0].trim().substring(0, 140),
             price: price,
             url: url
           });
         }
       });
       return results.slice(0, 20);
-    });
+    }, config);
 
     res.json({
       success: true,
-      site: 'mobile.de',
+      site: config.name,
       count: listings.length,
-      listings: listings,
-      debug: {
-        message: listings.length > 0 ? `Найдено ${listings.length} объявлений` : "Объявления не найдены даже после скролла"
-      }
+      listings: listings
     });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
   } finally {
     if (browser) await browser.close();
   }
@@ -90,4 +93,7 @@ app.post('/scrape', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => console.log(`🚀 Playwright сервис запущен на порту ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Сервис запущен на порту ${PORT}`);
+  console.log('Доступные сайты: truck1.eu, autoline.info');
+});
