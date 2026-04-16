@@ -1,6 +1,6 @@
 FROM node:20-bullseye-slim
 
-# Минимальные зависимости для Puppeteer
+# Минимальные системные зависимости
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     fonts-liberation \
@@ -40,13 +40,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --production
+
+# Изменено: npm install вместо npm ci
+RUN npm install --production
 
 COPY . .
-
-# Настройки Puppeteer
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
-ENV PUPPETEER_EXECUTABLE_PATH=""
 
 EXPOSE 3000
 
