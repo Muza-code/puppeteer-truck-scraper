@@ -1,6 +1,6 @@
 FROM node:20-bullseye-slim
 
-# Полная установка зависимостей для Chrome и Puppeteer
+# Минимальные зависимости для Puppeteer
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     fonts-liberation \
@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y \
     libexpat1 \
     libfontconfig1 \
     libgbm1 \
-    libgcc1 \
     libglib2.0-0 \
     libgtk-3-0 \
     libnspr4 \
@@ -35,10 +34,7 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    lsb-release \
     wget \
-    xdg-utils \
-    chromium \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -48,9 +44,9 @@ RUN npm ci --production
 
 COPY . .
 
-# Важно для Railway
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+# Настройки Puppeteer
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+ENV PUPPETEER_EXECUTABLE_PATH=""
 
 EXPOSE 3000
 
