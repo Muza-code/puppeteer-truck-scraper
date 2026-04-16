@@ -1,31 +1,17 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-const sites = {
-  'mobile.de': {
-    name: 'mobile.de',
-    url: 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C',
-    waitSelector: 'article, .offer-list-item, [data-testid="offer-list-item"]',
-    listingSelector: 'article'
-  },
-  'autoscout24.de': {
-    name: 'autoscout24.de',
-    url: 'https://www.autoscout24.de/lst/lkw?yearfrom=2021&atype=C&sort=standard',
-    waitSelector: 'article, .c-result-tile',
-    listingSelector: 'article'
+app.post('/scrape', async (req, res) => {
+  const { site } = req.body;
+  if (site !== 'mobile.de') {
+    return res.status(400).json({ success: false, error: 'Пока поддерживается только mobile.de' });
   }
-};
-
-async function scrapeSite(siteKey) {
-  const config = sites[siteKey];
-  if (!config) throw new Error('Неизвестный сайт: ' + siteKey);
-
-  console.log(`[Скрапер] Запуск ${config.name}`);
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -34,70 +20,61 @@ async function scrapeSite(siteKey) {
 
   try {
     const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
 
-    await page.goto(config.url, { waitUntil: 'networkidle2', timeout: 40000 });
+    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C';
+    console.log('Открываю:', url);
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 40000 });
 
-    // Ждём любые объявления
-    await page.waitForSelector(config.waitSelector, { timeout: 20000 }).catch(() => {
-      console.log('Селектор не найден, продолжаем...');
-    });
+    // Делаем скриншот для диагностики
+    const screenshot = await page.screenshot({ encoding: 'base64' });
 
+    // Пытаемся собрать объявления максимально грубо
     const listings = await page.evaluate(() => {
-      const items = Array.from(document.querySelectorAll('article, div[class*="offer"], div[class*="result"], div[class*="listing"]')).slice(0, 15);
-
-      return items.map(item => {
-        const title = item.innerText.split('\n')[0] || 'Без названия';
-        const priceMatch = item.innerText.match(/(\d{1,3}(?:\.\d{3})*(?:,\d+)?)\s*€?/);
-        const price = priceMatch ? priceMatch[0] + ' €' : 'Цена не указана';
+      const items = Array.from(document.querySelectorAll('article, div[class*="offer"], div[class*="result"], div[class*="listing"], [data-testid]'));
+      
+      return items.slice(0, 10).map((item, index) => {
+        const text = item.innerText || '';
+        const lines = text.split('\n').filter(l => l.trim().length > 3);
+        
+        let title = lines[0] || 'Без названия';
+        let price = 'Цена не указана';
+        const priceMatch = text.match(/(\d{1,3}(?:\s?\d{3})*(?:,\d+)?)\s*€?/);
+        if (priceMatch) price = priceMatch[0] + ' €';
 
         let url = '';
-        const link = item.querySelector('a');
+        const link = item.querySelector('a[href*="mobile.de"]');
         if (link) url = link.href;
 
-        const listing_id = url ? url.split('/').pop().replace(/\D/g, '') : Date.now().toString();
-
         return {
-          listing_id: listing_id || Date.now().toString(),
+          listing_id: 'diag_' + Date.now() + '_' + index,
           source: 'mobile.de',
-          title: title.trim().substring(0, 150),
+          title: title.substring(0, 120),
           price: price,
           url: url || ''
         };
       }).filter(item => item.url);
     });
 
-    console.log(`Найдено ${listings.length} объявлений`);
-    return listings;
-
-  } catch (err) {
-    console.error('Ошибка:', err.message);
-    throw err;
-  } finally {
-    await browser.close();
-  }
-}
-
-// API
-app.post('/scrape', async (req, res) => {
-  const { site } = req.body;
-  if (!site) return res.status(400).json({ success: false, error: 'Укажите site' });
-
-  try {
-    const listings = await scrapeSite(site);
     res.json({
       success: true,
-      site,
+      site: 'mobile.de',
       count: listings.length,
-      listings
+      listings: listings,
+      debug: {
+        message: "Скриншот сделан. Если count = 0, значит объявления не найдены на странице.",
+        screenshot_base64_length: screenshot.length
+      }
     });
+
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  } finally {
+    await browser.close();
   }
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => {
-  console.log(`🚀 Сервис запущен на порту ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
