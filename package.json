@@ -1,5 +1,5 @@
 {
-  "name": "puppeteer-truck-scraper",
+  "name": "truck-scraper",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "puppeteer": "^23.4.0"
+    "playwright": "^1.51.0"
   },
   "engines": {
     "node": "20.x"
