@@ -1,6 +1,6 @@
 FROM node:20-bullseye-slim
 
-# Минимальные системные зависимости
+# Устанавливаем системные зависимости для Playwright
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     fonts-liberation \
@@ -40,9 +40,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY package*.json ./
-
-# Изменено: npm install вместо npm ci
 RUN npm install --production
+
+# Важно: устанавливаем браузеры Playwright
+RUN npx playwright install --with-deps chromium
 
 COPY . .
 
