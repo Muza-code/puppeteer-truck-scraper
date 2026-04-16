@@ -10,63 +10,94 @@ const sites = {
   'mobile.de': {
     name: 'mobile.de',
     url: 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C',
-    listSelector: 'article',
-    titleSelector: 'h2, .title',
-    priceSelector: '.price, [data-testid="offer-price"]',
-    linkSelector: 'a'
+    waitSelector: 'article, .offer-list-item, [data-testid="offer-list-item"]',
+    listingSelector: 'article'
   },
   'autoscout24.de': {
     name: 'autoscout24.de',
-    url: 'https://www.autoscout24.de/lst/lkw?yearfrom=2021&atype=C',
-    listSelector: 'article',
-    titleSelector: 'h2',
-    priceSelector: '.price',
-    linkSelector: 'a'
+    url: 'https://www.autoscout24.de/lst/lkw?yearfrom=2021&atype=C&sort=standard',
+    waitSelector: 'article, .c-result-tile',
+    listingSelector: 'article'
   }
-  // truck1.eu и autoline.info пока отключены, чтобы не усложнять
 };
 
 async function scrapeSite(siteKey) {
   const config = sites[siteKey];
-  if (!config) throw new Error('Неизвестный сайт');
+  if (!config) throw new Error('Неизвестный сайт: ' + siteKey);
+
+  console.log(`[Скрапер] Запуск ${config.name}`);
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
   });
 
   try {
     const page = await browser.newPage();
-    await page.goto(config.url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
 
-    const listings = await page.evaluate((cfg) => {
-      return Array.from(document.querySelectorAll(cfg.listSelector)).slice(0, 10).map(item => ({
-        listing_id: Date.now().toString() + Math.random(),
-        source: cfg.name,
-        title: item.querySelector(cfg.titleSelector)?.innerText.trim() || 'Без названия',
-        price: item.querySelector(cfg.priceSelector)?.innerText.trim() || 'Цена не указана',
-        url: item.querySelector(cfg.linkSelector)?.href || ''
-      }));
-    }, config);
+    await page.goto(config.url, { waitUntil: 'networkidle2', timeout: 40000 });
 
+    // Ждём любые объявления
+    await page.waitForSelector(config.waitSelector, { timeout: 20000 }).catch(() => {
+      console.log('Селектор не найден, продолжаем...');
+    });
+
+    const listings = await page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('article, div[class*="offer"], div[class*="result"], div[class*="listing"]')).slice(0, 15);
+
+      return items.map(item => {
+        const title = item.innerText.split('\n')[0] || 'Без названия';
+        const priceMatch = item.innerText.match(/(\d{1,3}(?:\.\d{3})*(?:,\d+)?)\s*€?/);
+        const price = priceMatch ? priceMatch[0] + ' €' : 'Цена не указана';
+
+        let url = '';
+        const link = item.querySelector('a');
+        if (link) url = link.href;
+
+        const listing_id = url ? url.split('/').pop().replace(/\D/g, '') : Date.now().toString();
+
+        return {
+          listing_id: listing_id || Date.now().toString(),
+          source: 'mobile.de',
+          title: title.trim().substring(0, 150),
+          price: price,
+          url: url || ''
+        };
+      }).filter(item => item.url);
+    });
+
+    console.log(`Найдено ${listings.length} объявлений`);
     return listings;
+
+  } catch (err) {
+    console.error('Ошибка:', err.message);
+    throw err;
   } finally {
     await browser.close();
   }
 }
 
+// API
 app.post('/scrape', async (req, res) => {
   const { site } = req.body;
-  if (!sites[site]) return res.status(400).json({ success: false, error: 'Bad site' });
+  if (!site) return res.status(400).json({ success: false, error: 'Укажите site' });
 
   try {
     const listings = await scrapeSite(site);
-    res.json({ success: true, site, count: listings.length, listings });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.json({
+      success: true,
+      site,
+      count: listings.length,
+      listings
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Сервис запущен на порту ${PORT}`);
+});
