@@ -21,35 +21,40 @@ app.post('/scrape', async (req, res) => {
     });
 
     const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 }
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
     });
 
     const page = await context.newPage();
 
-    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C';
+    const url = 'https://suchen.mobile.de/lkw/sattelzugmaschine.html?minYear=2021&scopeId=C&sortOption.sortBy=searchNetGrossPrice&sortOption.sortOrder=ASCENDING';
 
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+    console.log('Открываю mobile.de...');
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    await page.waitForTimeout(8000); // Playwright использует waitForTimeout
+    // Долгое ожидание + несколько скроллов
+    await page.waitForTimeout(10000);
 
-    // Скролл
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(4000);
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.scrollBy(0, 1500));
+      await page.waitForTimeout(4000);
+    }
+
+    // Ждём появления хотя бы одного объявления
+    await page.waitForSelector('article, [data-testid="offer-list-item"], div[class*="offer"]', { timeout: 15000 }).catch(() => {});
 
     const listings = await page.evaluate(() => {
       const results = [];
-      const cards = document.querySelectorAll('article, [data-testid="offer-list-item"], div[class*="offer"]');
+      const cards = document.querySelectorAll('article, [data-testid="offer-list-item"], div[class*="offer"], div[class*="result"]');
 
       cards.forEach((card, i) => {
         const text = card.innerText || '';
-        if (text.length < 50) return;
+        if (text.length < 60) return;
 
         const priceMatch = text.match(/(\d{1,3}(?:\.\d{3})*)\s*€?/);
         const price = priceMatch ? priceMatch[0] + ' €' : 'Цена не указана';
 
         let url = '';
-        const link = card.querySelector('a');
+        const link = card.querySelector('a[href*="/details/"]') || card.querySelector('a');
         if (link && link.href.includes('mobile.de')) url = link.href;
 
         if (url) {
@@ -70,10 +75,13 @@ app.post('/scrape', async (req, res) => {
       site: 'mobile.de',
       count: listings.length,
       listings: listings,
-      debug: { message: listings.length > 0 ? "Найдены объявления" : "Объявления не найдены" }
+      debug: {
+        message: listings.length > 0 ? `Найдено ${listings.length} объявлений` : "Объявления не найдены даже после скролла"
+      }
     });
 
   } catch (error) {
+    console.error(error);
     res.status(500).json({ success: false, error: error.message });
   } finally {
     if (browser) await browser.close();
@@ -82,4 +90,4 @@ app.post('/scrape', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => console.log(`🚀 Playwright сервис запущен`));
+app.listen(PORT, () => console.log(`🚀 Playwright сервис запущен на порту ${PORT}`));
